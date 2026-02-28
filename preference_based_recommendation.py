@@ -322,7 +322,7 @@ class PreferenceBasedRecommendationAgent:
                     price = int(match.replace(",", "").replace(".", ""))
                     if 10000 <= price <= 10000000:  # 합리적인 가격 범위
                         prices.append(price)
-                except:
+                except Exception:
                     continue
         
         if prices:
@@ -339,7 +339,7 @@ class PreferenceBasedRecommendationAgent:
             if matches:
                 try:
                     price_info["discount_rate"] = int(matches[0])
-                except:
+                except Exception:
                     continue
         
         return price_info

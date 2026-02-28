@@ -185,7 +185,7 @@ class PriceRatingComparisonAgent:
                     price = int(match.replace(",", "").replace(".", ""))
                     if 5000 <= price <= 5000000:  # 합리적인 가격 범위 (5천원~500만원)
                         context_prices.append(price)
-                except:
+                except Exception:
                     continue
         
         # 2단계: 가격 패턴이 여러 번 나타나는 경우, 가장 큰 값을 현재가격으로 (할인 전 가격일 가능성)
@@ -241,7 +241,7 @@ class PriceRatingComparisonAgent:
                         has_price_keyword = any(kw in context for kw in price_keywords_found)
                         all_price_candidates.append((price, has_price_keyword, match.start()))
                         
-                except:
+                except Exception:
                     continue
         
         # 가격 후보 정렬: 키워드가 있는 가격 우선, 그 다음 위치 순서
@@ -288,7 +288,7 @@ class PriceRatingComparisonAgent:
                     price = int(match.replace(",", "").replace(".", ""))
                     if 5000 <= price <= 5000000:
                         original_prices.append(price)
-                except:
+                except Exception:
                     continue
         
         if original_prices:
@@ -343,7 +343,7 @@ class PriceRatingComparisonAgent:
                         if shipping <= 50000:  # 합리적인 배송비 범위
                             price_info["shipping_cost"] = shipping
                             break
-                    except:
+                    except Exception:
                         continue
         
         return price_info
@@ -398,7 +398,7 @@ class PriceRatingComparisonAgent:
                     rating = float(match)
                     if 0 <= rating <= 5:
                         ratings.append(rating)
-                except:
+                except Exception:
                     continue
         
         if ratings:
@@ -620,7 +620,7 @@ class PriceRatingComparisonAgent:
 | :--- | :--- | :--- | :--- |
 | **현재 가격** | {format_price(product1['price_info'])} | {format_price(product2['price_info'])} | |
 | **무신사 평점** | {format_rating(product1['rating_info'])} | {format_rating(product2['rating_info'])} | |
-| **핵심 스펙** | {product1['specs'][:100]}... | {product2['specs'][:100]}... | |
+| **핵심 스펙** | {product1['specs'][:100] + ('...' if len(product1['specs']) > 100 else '')} | {product2['specs'][:100] + ('...' if len(product2['specs']) > 100 else '')} | |
 | **Agent 추천** | {generate_recommendation(product1, winner == product1)} | {generate_recommendation(product2, winner == product2)} | **최종 추천:** {winner['name']} - {winner_reason} |
 """
         

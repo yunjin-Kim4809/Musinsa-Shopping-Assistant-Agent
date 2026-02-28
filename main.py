@@ -5,6 +5,31 @@
 
 import os
 import sys
+
+# 프로젝트 루트의 .env 파일을 환경변수로 로드 (python-dotenv 사용 시)
+def _load_dotenv():
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(project_dir, ".env")
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path)
+    except ImportError:
+        # python-dotenv 없을 때 .env 파일 직접 읽기
+        if os.path.isfile(env_path):
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        key, _, value = line.partition("=")
+                        key, value = key.strip(), value.strip().strip("'\"")
+                        if key in ("TAVILY_API_KEY", "OPENAI_API_KEY") and value and not os.getenv(key):
+                            os.environ[key] = value
+            except Exception:
+                pass
+_load_dotenv()
+
 from price_rating_comparison import PriceRatingComparisonAgent
 from preference_based_recommendation import PreferenceBasedRecommendationAgent
 from review_summary_agent import ReviewSummaryAgent
@@ -61,11 +86,14 @@ def get_user_choice() -> int:
 
 
 def check_api_key() -> str:
-    """환경변수에서 TAVILY_API_KEY를 확인하고 반환합니다."""
+    """환경변수 또는 .env에서 TAVILY_API_KEY를 확인하고 반환합니다."""
     api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key and TASTE_RECOMMENDATION_AVAILABLE:
+        api_key = load_api_key_from_env("TAVILY_API_KEY")
     if not api_key:
         print("⚠️ 환경변수 TAVILY_API_KEY가 설정되지 않았습니다.")
         print("환경변수를 설정하거나 직접 API 키를 입력해주세요.")
+        print("  → 프로젝트 폴더에 .env 파일을 만들고 TAVILY_API_KEY=키값 을 넣어도 됩니다.")
         api_key = input("TAVILY_API_KEY를 입력하세요 (또는 Enter로 종료): ").strip()
         if not api_key:
             print("프로그램을 종료합니다.")
@@ -74,16 +102,16 @@ def check_api_key() -> str:
 
 
 def check_openai_api_key() -> str:
-    """환경변수에서 OPENAI_API_KEY를 확인하고 반환합니다."""
+    """환경변수 또는 .env에서 OPENAI_API_KEY를 확인하고 반환합니다."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         # load_api_key_from_env 함수 사용 시도
         if TASTE_RECOMMENDATION_AVAILABLE:
-            api_key = load_api_key_from_env('OPENAI_API_KEY')
-        
+            api_key = load_api_key_from_env("OPENAI_API_KEY")
         if not api_key:
             print("⚠️ 환경변수 OPENAI_API_KEY가 설정되지 않았습니다.")
             print("환경변수를 설정하거나 직접 API 키를 입력해주세요.")
+            print("  → 프로젝트 폴더에 .env 파일을 만들고 OPENAI_API_KEY=키값 을 넣어도 됩니다.")
             api_key = input("OPENAI_API_KEY를 입력하세요 (또는 Enter로 종료): ").strip()
             if not api_key:
                 print("프로그램을 종료합니다.")
@@ -209,7 +237,11 @@ def run_taste_recommendation(tavily_api_key: str, openai_api_key: str):
         
         # 제품 검색 (키워드 + 자연어)
         response = search_products_with_tavily(keywords, tavily_client, natural_language_query)
-        
+
+        if not response or not response.get("results"):
+            print("\n⚠️ 검색 결과가 없습니다. 다른 키워드나 스타일로 다시 시도해 보세요.")
+            return
+
         # 추천 제품 포맷팅 (관련성 점수 계산 및 정렬)
         recommendations = format_recommendations(response, keywords, openai_client)
         
