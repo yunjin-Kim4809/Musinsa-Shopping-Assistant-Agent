@@ -189,7 +189,7 @@ class RecommendationService:
     # --- ⑤ 랭킹 ---
 
     def _rank(
-        self, candidates: list[_Candidate], profile: PreferenceProfile
+        self, candidates: list[_Candidate], profile: PreferenceProfile, top_k: int
     ) -> list[tuple[_Candidate, float]]:
         query_terms = profile.all_terms() or [profile.raw_input]
         query_tokens = tokenize(" ".join(query_terms))
@@ -206,7 +206,7 @@ class RecommendationService:
             scored.append((candidate, round(score, 2)))
 
         # 전체 정렬 대신 힙으로 상위 k개만 추출: O(n log k)
-        return heapq.nlargest(self._top_k, scored, key=lambda x: x[1])
+        return heapq.nlargest(top_k, scored, key=lambda x: x[1])
 
     @staticmethod
     def _rule_bonus(candidate: _Candidate, profile: PreferenceProfile) -> float:
@@ -228,7 +228,7 @@ class RecommendationService:
         return bonus
 
     def _budget_filter(
-        self, candidates: list[_Candidate], profile: PreferenceProfile
+        self, candidates: list[_Candidate], profile: PreferenceProfile, top_k: int
     ) -> list[_Candidate]:
         """명시 예산의 소프트 범위를 크게 벗어난 후보를 제외한다.
 
@@ -240,7 +240,7 @@ class RecommendationService:
         low = (profile.budget_min or 0) * _BUDGET_SOFT_LOW
         high = (profile.budget_max or float("inf")) * _BUDGET_SOFT_HIGH
         filtered = [c for c in candidates if c.price is None or low <= c.price <= high]
-        return filtered if len(filtered) >= self._top_k else candidates
+        return filtered if len(filtered) >= top_k else candidates
 
     # --- ⑥ 공개 API ---
 
@@ -248,12 +248,14 @@ class RecommendationService:
         self,
         preference_text: str | None = None,
         profile: PreferenceProfile | None = None,
+        top_k: int | None = None,
     ) -> RecommendationResult:
         """취향 텍스트(또는 위저드가 만든 프로필)로 제품을 추천한다."""
         if profile is None:
             if not preference_text or not preference_text.strip():
                 raise ValueError("취향 키워드를 입력해주세요.")
             profile = self.parse_profile(preference_text)
+        top_k = top_k or self._top_k
 
         queries = self._build_queries(profile)
         logger.info("추천 검색어 %d개: %s", len(queries), queries)
@@ -261,13 +263,13 @@ class RecommendationService:
         results = self._client.search_flat(queries)
         candidates = [c for r in results if (c := self._to_candidate(r))]
         candidates = self._dedupe(candidates)
-        candidates = self._budget_filter(candidates, profile)
+        candidates = self._budget_filter(candidates, profile, top_k)
 
         if not candidates:
             return RecommendationResult(profile=profile, products=[])
 
         products: list[RecommendedProduct] = []
-        for candidate, score in self._rank(candidates, profile):
+        for candidate, score in self._rank(candidates, profile, top_k):
             product = RecommendedProduct(
                 name=candidate.name,
                 url=candidate.url,
