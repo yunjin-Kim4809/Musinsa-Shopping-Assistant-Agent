@@ -82,6 +82,11 @@ class SearchClient(Protocol):
     ) -> dict[str, list[SearchResult]]:
         ...
 
+    def search_flat(
+        self, queries: Iterable[str], max_results: int | None = None
+    ) -> list[SearchResult]:
+        ...
+
 
 class _RawTransport(Protocol):
     """Tavily SDK 와 동일한 시그니처의 저수준 전송 계층 (테스트 주입용)."""
