@@ -8,10 +8,11 @@
 |------|--------|-------|
 | 구조 | 평면 스크립트 4개 (1,900줄) | 5계층 패키지 (domain/infra/analysis/services/api) |
 | 인터페이스 | CLI 메뉴만 | REST API (FastAPI) + CLI |
-| 외부 호출 | 매번 순차 호출, 실패 시 print 후 계속 | 캐시·재시도·rate limit·서킷 브레이커 + 병렬화 |
+| 외부 호출 | 매번 순차 호출, 실패 시 print 후 계속 | 캐시·singleflight·재시도·rate limit·서킷 브레이커 + 병렬화 |
 | 랭킹 | 키워드 존재 시 +N점 가산 | BM25 (IDF·TF 포화·길이 정규화) + 규칙 가산 |
 | 감성 분석 | 키워드 리스트 순회 `in` 검사 | Aho-Corasick 1회 스캔 + 극성 스팬 억제 |
-| 테스트 | 0개 | **139개** (네트워크·API 키 불필요, 0.2초) |
+| 테스트 | 0개 | **150개** (네트워크·API 키 불필요, 퍼즈 테스트 포함) |
+| 품질 도구 | 없음 | ruff 린트 + GitHub Actions CI + Dockerfile |
 | 패키징 | requirements.txt 3줄 | pyproject.toml + 콘솔 스크립트 |
 | 보안 | `.env` 가 git 에 커밋됨 | 추적 제거 + .env.example 템플릿 |
 
@@ -115,9 +116,28 @@ $ python -m pytest tests/
 4. **소실된 모듈 복원**: 원본 `취향기반추천.py` 없이 `.pyc` 만 존재
    → `marshal.loads` 로 코드 객체를 읽어 `co_consts` 에서 메뉴 구조·프롬프트 복원.
 
+## 7단계 — 2차 개선 라운드 (`feat`/`chore`)
+
+1차 리팩터링에서 "한계"로 기록했던 항목 중 실현 가치가 높은 것들을 구현:
+
+- **Singleflight 패턴** (`infra/singleflight.py`): 동일 키의 동시 캐시 미스를
+  원격 호출 1회로 병합 (Go `golang.org/x/sync/singleflight` 패턴).
+  리더의 예외도 팔로워에게 전파해 실패 시 stampede 재발을 방지.
+  통합 테스트로 "동시 요청 8개 → 원격 호출 1회" 검증.
+- **API 자체 rate limit 미들웨어**: 클라이언트(IP)별 토큰 버킷으로 429 +
+  Retry-After 응답. 버킷 저장소로 자체 TTL-LRU 캐시를 재사용해 메모리 유계 유지.
+- **퍼즈 테스트** (`tests/test_fuzz.py`): 고정 시드 무작위 입력 800케이스로
+  Aho-Corasick ↔ 브루트포스, 최적화 Levenshtein ↔ 전체 테이블 DP 대조.
+  거리 함수 공리(대칭성·삼각 부등식) 검증 포함.
+- **ruff 린트** 도입 및 전체 코드 정리 (import 정렬, 최신 문법 등 25건)
+- **GitHub Actions CI**: Python 3.10/3.12/3.13 매트릭스 테스트 + 린트
+- **Dockerfile**: 의존성 레이어 캐싱, 비루트 사용자, HEALTHCHECK 포함
+
+테스트: 139개 → **150개**.
+
 ## 이후 확장 아이디어
 
-- Redis 캐시 교체 (분산 환경), singleflight 로 cache stampede 제거
+- Redis 캐시/분산 rate limit (다중 인스턴스 환경)
 - 무신사 구조화 데이터 소스 연동 (검색 스니펫 의존 탈피)
 - 소형 한국어 감성 분류 모델 도입 (사전 기반의 한계 보완)
 - 사용자 세션·선호 이력 기반 개인화 랭킹

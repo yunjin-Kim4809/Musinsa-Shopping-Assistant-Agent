@@ -114,7 +114,7 @@ def run_wizard() -> PreferenceProfile:
         budget_max=budget_max,
     )
 
-    print(f"\n📋 선택한 취향 요약")
+    print("\n📋 선택한 취향 요약")
     print(LINE)
     if categories:
         print(f"  카테고리: {', '.join(categories)}")

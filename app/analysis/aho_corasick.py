@@ -23,8 +23,8 @@ Aho-Corasick 자동자는 전체 패턴을 트라이로 만들고 실패 링크(
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Iterable, Iterator
 
 
 @dataclass(frozen=True)

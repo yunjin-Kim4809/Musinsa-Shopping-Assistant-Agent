@@ -6,10 +6,11 @@
 
 **가격 비교 · 취향 추천 · 리뷰 요약**을 제공하는 쇼핑 에이전트 백엔드
 
+[![CI](https://github.com/yxzkng/Musinsa-Shopping-Assistant-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/yxzkng/Musinsa-Shopping-Assistant-Agent/actions)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-REST%20API-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Tests](https://img.shields.io/badge/tests-139%20passed-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/mock-network--free%20tests-blue)]()
+[![Tests](https://img.shields.io/badge/tests-150%20passed-brightgreen)]()
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)]()
 
 *HateSlop 미니 Agent 해커톤 출품작을 프로덕션 수준 백엔드로 리팩터링한 프로젝트*
 
@@ -55,18 +56,22 @@
         └──────────────┘          └──────────────┘
 ```
 
-외부 검색 API 호출은 4겹의 안정화 계층을 거칩니다:
+외부 검색 API 호출은 5겹의 안정화 계층을 거칩니다:
 
 ```
-캐시 조회 → [miss] → 재시도(지수 백오프+jitter) → 토큰 버킷 → 서킷 브레이커 → 원격 호출
+캐시 조회 → [miss] → singleflight(동시 미스 병합) → 재시도(지수 백오프+jitter)
+          → 토큰 버킷 → 서킷 브레이커 → 원격 호출
 ```
+
+서버 자체도 클라이언트별 토큰 버킷으로 보호됩니다 (초과 시 `429 + Retry-After`).
 
 ## 🧠 적용된 CS 기술
 
 | 기술 | 사용처 | 핵심 |
 |------|--------|------|
 | **TTL-LRU 캐시** | 검색 결과 캐싱 | 해시맵 + 이중 연결 리스트, O(1) get/put, lazy expiration |
-| **토큰 버킷** | API 호출 속도 제한 | lazy refill, 버스트 허용 + 장기 평균속도 제한 |
+| **Singleflight** | cache stampede 방지 | 동일 키 동시 미스를 원격 호출 1회로 병합 (Go 패턴) |
+| **토큰 버킷** | 검색 API 호출 제한 + 서버 자체 429 rate limit | lazy refill, 버스트 허용 + 장기 평균속도 제한 |
 | **서킷 브레이커** | 외부 장애 격리 | CLOSED/OPEN/HALF_OPEN 상태 머신, 장애 전파 차단 |
 | **지수 백오프 + full jitter** | 일시 장애 재시도 | thundering herd 방지 (AWS 권장 방식) |
 | **Aho-Corasick** | 리뷰 감성/주제 분석 | 수백 개 키워드를 텍스트 1회 스캔으로 매칭, O(n+z) |
@@ -119,6 +124,13 @@ python -m app.api
 ```
 
 서버 실행 후 **http://127.0.0.1:8000/docs** 에서 Swagger UI로 바로 테스트할 수 있습니다.
+
+**Docker**
+
+```bash
+docker build -t musinsa-agent .
+docker run -p 8000:8000 --env-file .env musinsa-agent
+```
 
 ---
 
@@ -252,15 +264,17 @@ docs/
 └── WORK_LOG.md             # 리팩터링 작업 내역
 ```
 
-## 🧪 테스트
+## 🧪 테스트 · 품질
 
 전 테스트가 **네트워크·API 키 없이** 실행됩니다 (가짜 시계·가짜 검색 클라이언트 주입).
+Aho-Corasick/Levenshtein 은 무작위 입력으로 기준 구현과 대조하는 **퍼즈 테스트**를 포함합니다.
 
 ```bash
-pip install pytest httpx
-python -m pytest tests/ -v
-# 139 passed
+python -m pytest tests/ -v   # 150 passed
+ruff check app tests main.py # 린트
 ```
+
+GitHub Actions CI 가 push/PR 마다 Python 3.10/3.12/3.13 매트릭스로 테스트와 린트를 실행합니다.
 
 ---
 
