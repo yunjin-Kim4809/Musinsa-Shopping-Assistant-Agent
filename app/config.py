@@ -27,9 +27,14 @@ class Settings(BaseSettings):
     cache_ttl_seconds: float = 300.0
     cache_max_size: int = 256
 
-    # 토큰 버킷 rate limiter
+    # 토큰 버킷 rate limiter (외부 검색 API 호출용)
     rate_limit_per_second: float = 5.0
     rate_limit_burst: int = 10
+
+    # API 자체 rate limit (클라이언트 IP별, 우리 서버 보호용)
+    api_rate_limit_enabled: bool = True
+    api_rate_limit_per_second: float = 10.0
+    api_rate_limit_burst: int = 20
 
     # 서킷 브레이커
     circuit_failure_threshold: int = 5

@@ -9,6 +9,7 @@
 예외 → HTTP 상태 코드 매핑
 --------------------------
 - ValueError (입력 문제)            → 400 Bad Request
+- API rate limit 초과               → 429 Too Many Requests (+ Retry-After)
 - SearchUnavailableError (서킷 OPEN) → 503 Service Unavailable (+ Retry-After)
 - SearchError (업스트림 실패)        → 502 Bad Gateway
 - pydantic 검증 실패                → 422 (FastAPI 기본)
@@ -17,6 +18,8 @@
 from __future__ import annotations
 
 import logging
+import math
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -27,6 +30,8 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api.deps import ServiceContainer, build_container
 from app.api.routes import agents, system
+from app.infra.cache import TTLLRUCache
+from app.infra.rate_limiter import TokenBucket
 from app.infra.search_client import SearchError, SearchUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -58,6 +63,50 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.container = container
+
+    # --- 미들웨어: 클라이언트별 API rate limit ---
+    #
+    # 외부 검색 API 를 보호하는 내부 토큰 버킷과 별개로, 우리 서버 자체를
+    # 남용으로부터 보호한다. 클라이언트(IP)별 토큰 버킷을 TTL-LRU 캐시에
+    # 보관해 유휴 클라이언트의 버킷이 자동 정리된다 (메모리 유계).
+    _client_buckets = TTLLRUCache(max_size=1024, ttl=600.0)
+    _buckets_lock = threading.Lock()
+
+    def _bucket_for(client_key: str, container: ServiceContainer) -> TokenBucket:
+        with _buckets_lock:
+            bucket = _client_buckets.get(client_key)
+            if bucket is None:
+                bucket = TokenBucket(
+                    rate=container.settings.api_rate_limit_per_second,
+                    capacity=container.settings.api_rate_limit_burst,
+                )
+                _client_buckets.put(client_key, bucket)
+            return bucket
+
+    @app.middleware("http")
+    async def api_rate_limit(request: Request, call_next):
+        container: ServiceContainer | None = request.app.state.container
+        if (
+            container is None
+            or not container.settings.api_rate_limit_enabled
+            or not request.url.path.startswith("/api/")
+        ):
+            return await call_next(request)
+
+        client_key = request.client.host if request.client else "anonymous"
+        bucket = _bucket_for(client_key, container)
+        if not bucket.try_acquire():
+            rate = container.settings.api_rate_limit_per_second
+            retry_after = math.ceil(max(1.0 - bucket.available_tokens, 0.0) / rate)
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "rate_limited",
+                    "detail": "요청이 너무 잦습니다. 잠시 후 다시 시도해주세요.",
+                },
+                headers={"Retry-After": str(max(1, retry_after))},
+            )
+        return await call_next(request)
 
     # --- 미들웨어: 요청 ID + 처리 시간 로깅 ---
 

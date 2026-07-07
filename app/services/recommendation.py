@@ -199,7 +199,7 @@ class RecommendationService:
         max_score = max(raw_scores, default=0.0)
 
         scored: list[tuple[_Candidate, float]] = []
-        for candidate, raw in zip(candidates, raw_scores):
+        for candidate, raw in zip(candidates, raw_scores, strict=True):
             relevance = (raw / max_score) if max_score > 0 else 0.0
             score = relevance * _BM25_WEIGHT
             score += self._rule_bonus(candidate, profile)

@@ -79,15 +79,10 @@ class ComparisonService:
         - 평점 점수 (50점 만점): 5점 만점 평점의 선형 환산. 미상이면 25점.
         - 할인 보너스 (최대 10점): 할인율 × 0.2
         """
-        if price.current:
-            price_score = max(0.0, 50.0 - (price.current / 10_000) * 0.5)
-        else:
-            price_score = 25.0
-
-        if rating.rating:
-            rating_score = (rating.rating / 5.0) * 50.0
-        else:
-            rating_score = 25.0
+        price_score = (
+            max(0.0, 50.0 - (price.current / 10_000) * 0.5) if price.current else 25.0
+        )
+        rating_score = (rating.rating / 5.0) * 50.0 if rating.rating else 25.0
 
         discount_bonus = min(10.0, (price.discount_rate or 0) * 0.2)
         return round(price_score + rating_score + discount_bonus, 2)

@@ -13,8 +13,8 @@ from app.services.review_summary import ReviewSummaryService
 from tests.conftest import FakeSearchClient, make_result
 
 
-def make_test_client(search_client) -> TestClient:
-    settings = Settings(tavily_api_key="test-key", openai_api_key=None)
+def make_test_client(search_client, settings: Settings | None = None) -> TestClient:
+    settings = settings or Settings(tavily_api_key="test-key", openai_api_key=None)
     container = ServiceContainer(
         settings=settings,
         search_client=search_client,
@@ -165,3 +165,38 @@ def test_요청_ID_헤더(client):
 
     echoed = client.get("/health", headers={"X-Request-ID": "test-trace-42"})
     assert echoed.headers["X-Request-ID"] == "test-trace-42"
+
+
+def test_API_rate_limit_초과시_429():
+    settings = Settings(
+        tavily_api_key="test-key",
+        openai_api_key=None,
+        api_rate_limit_per_second=0.001,  # 리필이 사실상 없도록
+        api_rate_limit_burst=2,
+    )
+    client = make_test_client(FakeSearchClient(), settings=settings)
+
+    assert client.get("/api/v1/stats").status_code == 200
+    assert client.get("/api/v1/stats").status_code == 200
+
+    blocked = client.get("/api/v1/stats")  # 버스트(2) 소진
+    assert blocked.status_code == 429
+    assert blocked.json()["error"] == "rate_limited"
+    assert int(blocked.headers["Retry-After"]) >= 1
+
+    # /health 는 rate limit 대상이 아님
+    assert client.get("/health").status_code == 200
+
+
+def test_API_rate_limit_비활성화():
+    settings = Settings(
+        tavily_api_key="test-key",
+        openai_api_key=None,
+        api_rate_limit_enabled=False,
+        api_rate_limit_per_second=0.001,
+        api_rate_limit_burst=1,
+    )
+    client = make_test_client(FakeSearchClient(), settings=settings)
+
+    for _ in range(5):
+        assert client.get("/api/v1/stats").status_code == 200

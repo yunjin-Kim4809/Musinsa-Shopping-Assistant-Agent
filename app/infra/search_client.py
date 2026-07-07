@@ -4,14 +4,18 @@
 
     search(query)
       └─ ① TTL-LRU 캐시 조회 ── 적중 시 즉시 반환 (API 호출·과금 없음)
-      └─ ② 재시도 루프 (지수 백오프 + full jitter)
-           └─ ③ 토큰 버킷 ── 호출 속도 제한
-           └─ ④ 서킷 브레이커 ── 연속 실패 시 빠른 차단
-                └─ ⑤ Tavily API 원격 호출
+      └─ ② singleflight ── 동일 키 동시 미스를 원격 호출 1회로 병합
+           └─ ③ 재시도 루프 (지수 백오프 + full jitter)
+                └─ ④ 토큰 버킷 ── 호출 속도 제한
+                └─ ⑤ 서킷 브레이커 ── 연속 실패 시 빠른 차단
+                     └─ ⑥ Tavily API 원격 호출
 
 조합 순서의 근거
 ----------------
 - 캐시가 가장 바깥: 적중하면 rate limit 토큰도 소비하지 않는다.
+- singleflight 가 캐시 바로 안쪽: 캐시는 "시간축" 중복(이미 끝난 호출)을,
+  singleflight 는 "동시성축" 중복(지금 진행 중인 호출)을 제거한다.
+  이 조합으로 cache stampede(동시 미스 폭주)가 사라진다.
 - 서킷 브레이커가 원격 호출 바로 앞: 실패 기록이 실제 원격 실패만 반영한다.
   (rate limit 대기 초과 같은 클라이언트 사정은 실패로 세지 않음)
 - CircuitOpenError 는 재시도 대상에서 제외: 서버가 죽었다는 판정이므로
@@ -29,14 +33,16 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Protocol
+from typing import Any, Protocol
 
 from app.infra.cache import TTLLRUCache
 from app.infra.circuit_breaker import CircuitBreaker, CircuitOpenError
 from app.infra.rate_limiter import TokenBucket
 from app.infra.retry import retry
+from app.infra.singleflight import SingleFlight
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +154,7 @@ class TavilySearchClient:
         self._max_workers = max_workers
         self._rate_wait_timeout = rate_wait_timeout
         self._stats = _ClientStats()
+        self._singleflight = SingleFlight()
 
         # 재시도 정책을 인스턴스 설정으로 구성 (SearchError만 재시도)
         self._attempt_with_retry = retry(
@@ -205,10 +212,26 @@ class TavilySearchClient:
     # --- 공개 API ---
 
     def search(self, query: str, max_results: int | None = None) -> list[SearchResult]:
-        """단일 쿼리 검색. 캐시 적중 시 원격 호출 없이 반환."""
+        """단일 쿼리 검색. 캐시 적중 시 원격 호출 없이 반환.
+
+        캐시 미스 시 동일 키의 동시 요청은 singleflight 로 병합되어
+        원격 호출이 1회만 나간다 (cache stampede 방지).
+        """
         max_results = max_results or self._default_max_results
         key = (query, max_results, self._search_depth)
 
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+
+        return self._singleflight.do(
+            key, lambda: self._fetch_and_cache(key, query, max_results)
+        )
+
+    def _fetch_and_cache(
+        self, key: tuple, query: str, max_results: int
+    ) -> list[SearchResult]:
+        # 직전 flight 의 리더가 방금 캐시를 채웠을 수 있으므로 재확인 (double-check)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
@@ -274,6 +297,7 @@ class TavilySearchClient:
             "cache_size": len(self._cache),
             "circuit_breaker": self._breaker.snapshot(),
             "rate_limiter_tokens": round(self._bucket.available_tokens, 2),
+            "singleflight_in_flight": self._singleflight.in_flight_count(),
             "remote_calls": self._stats.remote_calls,
             "remote_failures": self._stats.failures,
         }
